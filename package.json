@@ -1,16 +1,12 @@
 {
   "name": "shadow-relay",
   "version": "1.0.0",
-  "description": "C2 Relay Server",
+  "type": "module",
   "main": "index.js",
-  "type": "module", 
   "dependencies": {
     "ws": "^8.18.0"
   },
   "scripts": {
     "start": "node index.js"
-  },
-  "engines": {
-    "node": ">=14.0.0"
   }
 }
